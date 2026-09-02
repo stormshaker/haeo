@@ -1,4 +1,4 @@
-import { computed, makeAutoObservable } from "mobx";
+import { computed, makeAutoObservable, observable } from "mobx";
 
 import { clamp, linearScale } from "./geometry";
 import { computeHoverIndices, sharedTimeline } from "./hover";
@@ -94,6 +94,12 @@ export class ForecastCardStore {
   constructor(instanceId = 0) {
     this.instanceId = instanceId;
     makeAutoObservable(this, {
+      // `hass` is Home Assistant's entire state tree and is replaced wholesale on
+      // every state change; `normalizedSeriesCache` is likewise reassigned, never
+      // mutated in place. Observing them deeply walks tens of thousands of
+      // properties per update and blocks the main thread.
+      hass: observable.ref,
+      normalizedSeriesCache: observable.ref,
       instanceId: false,
       plotPathsSnapshot: false,
       plotPathsSnapshotKey: false,

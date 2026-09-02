@@ -43,8 +43,9 @@ const browserTreeshake = {
 // `customElements.define` immediately, with no heavy imports. The heavy
 // rendering controller (preact, MobX, ELK) is split into a lazily-imported
 // chunk so element registration never waits on it to download or evaluate.
-// Chunk filenames are stable (no content hash) and prefixed per card to avoid
-// collisions and repo churn.
+// Chunk filenames carry a content hash and are prefixed per card. The hash lets
+// the bundles be served with long-lived cache headers: a new build produces a new
+// chunk filename, so a cached chunk can never be stale against a newer entry.
 export default defineConfig([
   {
     input: resolve(rootDir, "src/index.ts"),
@@ -55,7 +56,7 @@ export default defineConfig([
       dir: outDir,
       format: "esm",
       entryFileNames: "haeo-forecast-card.min.js",
-      chunkFileNames: "haeo-forecast-card.[name].js",
+      chunkFileNames: "haeo-forecast-card.[name].[hash].js",
       sourcemap: false,
       minify: true,
       codeSplitting: true,
@@ -70,7 +71,7 @@ export default defineConfig([
       dir: outDir,
       format: "esm",
       entryFileNames: "haeo-topology-card.min.js",
-      chunkFileNames: "haeo-topology-card.[name].js",
+      chunkFileNames: "haeo-topology-card.[name].[hash].js",
       sourcemap: false,
       minify: true,
       codeSplitting: true,

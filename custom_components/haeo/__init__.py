@@ -19,6 +19,7 @@ from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.translation import async_get_translations
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.loader import async_get_integration
 from homeassistant.setup import async_when_setup
 
 from custom_components.haeo.const import (
@@ -97,14 +98,22 @@ async def _async_register_static_frontend_resources(hass: HomeAssistant) -> None
         _LOGGER.debug("No static card bundles found in %s", static_dir)
         return
 
+    # Long-lived cache headers are safe because the entry URL below carries the
+    # integration version and the lazily imported chunks carry a content hash, so a
+    # cached copy can never be stale against a newer build. Without caching, the
+    # bundles are refetched on every cold load and the custom element is frequently
+    # not defined before Lovelace gives up waiting for it.
     await http.async_register_static_paths(
-        [StaticPathConfig(STATIC_CARD_STATIC_PATH, str(static_dir), cache_headers=False)]
+        [StaticPathConfig(STATIC_CARD_STATIC_PATH, str(static_dir), cache_headers=True)]
     )
+
+    integration = await async_get_integration(hass, DOMAIN)
+    cache_tag = integration.version or "dev"
 
     async def _register_card_urls(hass: HomeAssistant, _component: str) -> None:
         """Register each available card bundle as a Lovelace resource."""
         for url_path in available_bundles:
-            add_extra_js_url(hass, url_path)
+            add_extra_js_url(hass, f"{url_path}?v={cache_tag}")
 
     # add_extra_js_url writes to a registry the frontend component only creates during its
     # own setup, so calling it here would race with startup ordering. Defer registration

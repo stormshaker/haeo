@@ -114,6 +114,15 @@ export class HaeoTopologyCard extends HTMLElement {
   }
 }
 
-if (!customElements.get("haeo-topology-card")) {
+// Register unconditionally and swallow the duplicate-registration error, rather than
+// gating on customElements.get(). Home Assistant installs commonly carry a custom card
+// that patches the custom element registry, and a patched get() can report a name as
+// taken while it is not actually registered. The guarded form then skips the define and
+// the element never exists, so Lovelace renders "Custom element doesn't exist". Calling
+// define() and catching is correct either way: a genuine double-registration throws and
+// is ignored, which is exactly what the guard intended.
+try {
   customElements.define("haeo-topology-card", HaeoTopologyCard);
+} catch {
+  // already registered by an earlier evaluation of this bundle
 }

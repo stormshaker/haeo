@@ -32,7 +32,7 @@ from custom_components.haeo.const import (
     CONF_INTEGRATION_TYPE,
     DOMAIN,
     INTEGRATION_TYPE_HUB,
-    STATIC_CARD_BUNDLES,
+    STATIC_CARD_ENTRY_PREFIXES,
     STATIC_CARD_STATIC_DIR,
     STATIC_CARD_STATIC_PATH,
 )
@@ -988,8 +988,9 @@ async def test_async_setup_registers_static_frontend_resource(hass: HomeAssistan
     assert configs[0].url_path == STATIC_CARD_STATIC_PATH
     assert configs[0].path.endswith(STATIC_CARD_STATIC_DIR)
     registered_urls = hass.data[DATA_EXTRA_MODULE_URL].urls
-    for _file_path, url_path in STATIC_CARD_BUNDLES:
-        assert url_path in registered_urls
+    assert registered_urls
+    for prefix in STATIC_CARD_ENTRY_PREFIXES:
+        assert any(url.startswith(f"{STATIC_CARD_STATIC_PATH}/{prefix}") for url in registered_urls)
 
 
 async def test_async_setup_registers_static_urls_when_frontend_sets_up_later(hass: HomeAssistant) -> None:
@@ -1019,8 +1020,9 @@ async def test_async_setup_registers_static_urls_when_frontend_sets_up_later(has
     await hass.async_block_till_done()
 
     registered_urls = hass.data[DATA_EXTRA_MODULE_URL].urls
-    for _file_path, url_path in STATIC_CARD_BUNDLES:
-        assert url_path in registered_urls
+    assert registered_urls
+    for prefix in STATIC_CARD_ENTRY_PREFIXES:
+        assert any(url.startswith(f"{STATIC_CARD_STATIC_PATH}/{prefix}") for url in registered_urls)
 
 
 async def test_async_register_static_skips_when_http_unavailable(

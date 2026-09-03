@@ -114,15 +114,43 @@ export class HaeoTopologyCard extends HTMLElement {
   }
 }
 
-// Register unconditionally and swallow the duplicate-registration error, rather than
-// gating on customElements.get(). Home Assistant installs commonly carry a custom card
-// that patches the custom element registry, and a patched get() can report a name as
-// taken while it is not actually registered. The guarded form then skips the define and
-// the element never exists, so Lovelace renders "Custom element doesn't exist". Calling
-// define() and catching is correct either way: a genuine double-registration throws and
-// is ignored, which is exactly what the guard intended.
-try {
-  customElements.define("haeo-topology-card", HaeoTopologyCard);
-} catch {
-  // already registered by an earlier evaluation of this bundle
+/**
+ * Register a card element, retrying until the registry actually accepts it.
+ *
+ * Home Assistant patches `customElements` with the scoped custom element registry
+ * polyfill, and its `define()` can throw for a name that is not in fact registered —
+ * `customElements.get()` still returns undefined afterwards, and defining the same
+ * name moments later succeeds. A plain `define()` (or the older
+ * `if (!get()) define()` guard) therefore leaves the element unregistered and
+ * Lovelace renders "Custom element doesn't exist" for a bundle that loaded and ran.
+ *
+ * Retrying costs nothing once registration succeeds, and stops immediately when it
+ * does.
+ */
+function registerCardElement(tag: string, ctor: CustomElementConstructor): void {
+  const attempt = (): boolean => {
+    if (customElements.get(tag) !== undefined) {
+      return true;
+    }
+    try {
+      customElements.define(tag, ctor);
+    } catch {
+      // Registry shim rejected it this turn; a later attempt normally succeeds.
+    }
+    return customElements.get(tag) !== undefined;
+  };
+
+  if (attempt()) {
+    return;
+  }
+
+  let attempts = 0;
+  const timer = setInterval(() => {
+    attempts += 1;
+    if (attempt() || attempts >= 100) {
+      clearInterval(timer);
+    }
+  }, 50);
 }
+
+registerCardElement("haeo-topology-card", HaeoTopologyCard);

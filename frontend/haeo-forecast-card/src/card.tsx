@@ -130,39 +130,43 @@ export class HaeoForecastCard extends HTMLElement {
 }
 
 /**
- * Register a card element, retrying until the registry actually accepts it.
+ * Register a card element, and keep it registered.
  *
- * Home Assistant patches `customElements` with the scoped custom element registry
- * polyfill, and its `define()` can throw for a name that is not in fact registered —
- * `customElements.get()` still returns undefined afterwards, and defining the same
- * name moments later succeeds. A plain `define()` (or the older
- * `if (!get()) define()` guard) therefore leaves the element unregistered and
- * Lovelace renders "Custom element doesn't exist" for a bundle that loaded and ran.
+ * Home Assistant can replace `window.customElements` with the scoped custom element
+ * registry polyfill *after* this module has already run. The replacement registry does
+ * not carry over registrations made against the native one, so an element registered
+ * moments earlier silently disappears and Lovelace renders "Custom element doesn't
+ * exist" for a bundle that loaded, ran, and registered without error.
  *
- * Retrying costs nothing once registration succeeds, and stops immediately when it
- * does.
+ * Measured on a failing load: at module evaluation `customElements.define` was still
+ * native, the define did not throw, and `customElements.get(tag)` returned the
+ * constructor immediately afterwards — yet the element was gone by the time Lovelace
+ * built the card. On a load that succeeded, the polyfill was already installed when the
+ * module ran, so the registration went into the registry that survived.
+ *
+ * Registering once is therefore not enough, and neither is retrying only until the first
+ * success. This re-registers whenever the element goes missing, for long enough to cover
+ * the swap, then stops.
  */
 function registerCardElement(tag: string, ctor: CustomElementConstructor): void {
-  const attempt = (): boolean => {
+  const ensure = (): void => {
     if (customElements.get(tag) !== undefined) {
-      return true;
+      return;
     }
     try {
       customElements.define(tag, ctor);
     } catch {
-      // Registry shim rejected it this turn; a later attempt normally succeeds.
+      // Another evaluation of this bundle won the race; nothing to do.
     }
-    return customElements.get(tag) !== undefined;
   };
 
-  if (attempt()) {
-    return;
-  }
+  ensure();
 
-  let attempts = 0;
+  let ticks = 0;
   const timer = setInterval(() => {
-    attempts += 1;
-    if (attempt() || attempts >= 100) {
+    ticks += 1;
+    ensure();
+    if (ticks >= 200) {
       clearInterval(timer);
     }
   }, 50);

@@ -114,15 +114,47 @@ export class HaeoTopologyCard extends HTMLElement {
   }
 }
 
-// Register unconditionally and swallow the duplicate-registration error, rather than
-// gating on customElements.get(). Home Assistant installs commonly carry a custom card
-// that patches the custom element registry, and a patched get() can report a name as
-// taken while it is not actually registered. The guarded form then skips the define and
-// the element never exists, so Lovelace renders "Custom element doesn't exist". Calling
-// define() and catching is correct either way: a genuine double-registration throws and
-// is ignored, which is exactly what the guard intended.
-try {
-  customElements.define("haeo-topology-card", HaeoTopologyCard);
-} catch {
-  // already registered by an earlier evaluation of this bundle
+/**
+ * Register a card element, and keep it registered.
+ *
+ * Home Assistant can replace `window.customElements` with the scoped custom element
+ * registry polyfill *after* this module has already run. The replacement registry does
+ * not carry over registrations made against the native one, so an element registered
+ * moments earlier silently disappears and Lovelace renders "Custom element doesn't
+ * exist" for a bundle that loaded, ran, and registered without error.
+ *
+ * Measured on a failing load: at module evaluation `customElements.define` was still
+ * native, the define did not throw, and `customElements.get(tag)` returned the
+ * constructor immediately afterwards — yet the element was gone by the time Lovelace
+ * built the card. On a load that succeeded, the polyfill was already installed when the
+ * module ran, so the registration went into the registry that survived.
+ *
+ * Registering once is therefore not enough, and neither is retrying only until the first
+ * success. This re-registers whenever the element goes missing, for long enough to cover
+ * the swap, then stops.
+ */
+function registerCardElement(tag: string, ctor: CustomElementConstructor): void {
+  const ensure = (): void => {
+    if (customElements.get(tag) !== undefined) {
+      return;
+    }
+    try {
+      customElements.define(tag, ctor);
+    } catch {
+      // Another evaluation of this bundle won the race; nothing to do.
+    }
+  };
+
+  ensure();
+
+  let ticks = 0;
+  const timer = setInterval(() => {
+    ticks += 1;
+    ensure();
+    if (ticks >= 200) {
+      clearInterval(timer);
+    }
+  }, 50);
 }
+
+registerCardElement("haeo-topology-card", HaeoTopologyCard);

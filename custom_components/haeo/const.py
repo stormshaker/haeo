@@ -26,10 +26,12 @@ ELEMENT_TYPE_NETWORK: Final = "network"
 STATIC_CARD_STATIC_PATH: Final = "/haeo-static"
 STATIC_CARD_STATIC_DIR: Final = "www"
 
-# (relative file path under the integration directory, served URL path)
-STATIC_CARD_BUNDLES: Final[tuple[tuple[str, str], ...]] = (
-    ("www/haeo-forecast-card.min.js", "/haeo-static/haeo-forecast-card.min.js"),
-    ("www/haeo-topology-card.min.js", "/haeo-static/haeo-topology-card.min.js"),
+# Entry bundle filenames carry a content hash, so they are discovered at runtime
+# rather than hardcoded. Every emitted file being hashed is what makes long-lived
+# cache headers safe: no stable URL survives a rebuild to serve a stale copy.
+STATIC_CARD_ENTRY_PREFIXES: Final[tuple[str, ...]] = (
+    "haeo-forecast-card.entry.",
+    "haeo-topology-card.entry.",
 )
 
 # Optimization statuses

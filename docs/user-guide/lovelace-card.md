@@ -15,17 +15,20 @@ State-of-charge series are drawn as continuous lines.
 You must already have the HAEO integration installed and running.
 At least one HAEO output sensor must expose a `forecast` attribute.
 
-## Add the card resource
+## Card resources register themselves
 
-The integration serves the card bundle at:
+There is nothing to add by hand. The integration serves its bundles under
+`/haeo-static/` and registers them with the frontend on startup.
 
-`/haeo-static/haeo-forecast-card.min.js`
+Entry filenames carry a content hash — for example
+`/haeo-static/haeo-forecast-card.entry.<hash>.js` — and change with every build, so they
+must not be pinned in a Lovelace resource. Hashing every emitted file is what allows the
+bundles to be served with long-lived cache headers: no stable URL survives a rebuild, so
+a cached copy can never be served alongside a newer one.
 
-Add this as a Lovelace resource:
-
-1. Open **Settings -> Dashboards -> Resources**.
-2. Add a new resource URL: `/haeo-static/haeo-forecast-card.min.js`.
-3. Set resource type to **JavaScript module**.
+If you added a manual Lovelace resource for these cards under an older release, **remove
+it**. It pins a filename that no longer exists, and a stale cached copy loaded beside the
+current bundle will race it to register the same custom element.
 
 ## Basic card config
 
@@ -88,7 +91,7 @@ If the card shows an empty state:
 For forecast data issues, also confirm:
 
 - Each forecast entity has a populated `forecast` attribute.
-- The Lovelace resource URL is exactly `/haeo-static/haeo-forecast-card.min.js`.
+- No stale manual Lovelace resource is pinning an old card filename (see above).
 
 ## Next steps
 

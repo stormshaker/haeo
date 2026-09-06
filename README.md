@@ -1,3 +1,35 @@
+> ## This is a fork, and probably not what you want
+>
+> Upstream is **[hass-energy/haeo](https://github.com/hass-energy/haeo)**, and that is where to
+> start. This fork exists only to carry three frontend fixes that upstream v0.4.1 does not have
+> yet, while they wait on pull requests. It is a stopgap, not a home for this code.
+>
+> | | |
+> |---|---|
+> | Base | upstream `main` at `dbe05f5`, plus the three fixes and a version bump, nothing else |
+> | Current release | [`v0.4.1.post6`](https://github.com/stormshaker/haeo/releases/tag/v0.4.1.post6) |
+> | Install | HACS custom repository `stormshaker/haeo`. Remove `hass-energy/haeo` first, then **restart** Home Assistant rather than reloading |
+> | Full evidence | **[#1](https://github.com/stormshaker/haeo/issues/1)** |
+>
+> The three fixes, briefly:
+>
+> 1. **The forecast card wedges the browser main thread**, for minutes at a time on a dashboard
+>    with many series. It deep observes Home Assistant's entire state tree through MobX on every
+>    state change. Upstream [#435](https://github.com/hass-energy/haeo/issues/435).
+> 2. **Bundles are served with no cache headers**, on filenames carrying no content hash, so cards
+>    frequently fail to register on a cold load with `Custom element doesn't exist`.
+> 3. **Home Assistant can swap `window.customElements`** for the scoped registry polyfill after a
+>    card bundle has already run, silently discarding a registration that succeeded. This one is
+>    worst over Home Assistant Cloud, and so fails every time in the companion apps.
+>
+> If something breaks while you are running this fork, please
+> [file it here](https://github.com/stormshaker/haeo/issues). Finding problems before the pull
+> requests go up is exactly the point of the soak.
+>
+> Everything below this line is upstream's README, unchanged.
+
+---
+
 <p align="center">
     <img src="docs/assets/logo.svg" alt="HAEO Logo" width="512">
 </p>

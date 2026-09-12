@@ -506,9 +506,11 @@ class Network:
             # stays None, _relax_lex_constraint silently becomes a no-op, and every later
             # solve is constrained by a row nothing can reach. The plural form wraps the batch
             # and deleteRows on any exception, so a failure leaves the model untouched and the
-            # next solve can recover. A single expression is a valid one-element batch --
-            # highs_linear_expression is not Iterable, so it is not unpacked.
-            (self._lex_constraint,) = self._solver.addConstrs(constraint_expr)
+            # next solve can recover. Passed as a one-element tuple: addConstrs is typed as
+            # taking an Iterable and a bare highs_linear_expression is not one -- which is
+            # both why passing it bare works at runtime (addConstrs only unpacks args[0] when
+            # it is Iterable) and why the type checker rejects it. The tuple satisfies both.
+            (self._lex_constraint,) = self._solver.addConstrs((constraint_expr,))
         else:
             self._update_constraint(self._lex_constraint, constraint_expr)
 

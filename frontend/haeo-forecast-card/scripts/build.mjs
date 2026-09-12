@@ -10,8 +10,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, "..");
 const workspaceRoot = resolve(rootDir, "..", "..");
 const outDir = resolve(workspaceRoot, "custom_components", "haeo", "www");
-const forecastOutFile = resolve(outDir, "haeo-forecast-card.min.js");
-const topologyCardOutFile = resolve(outDir, "haeo-topology-card.min.js");
 const topologyOutFile = resolve(rootDir, "dist", "render-topology-svg.mjs");
 const watch = process.argv.includes("--watch");
 
@@ -27,28 +25,35 @@ async function cleanCardOutputDir() {
   );
 }
 
-const builtFiles = [forecastOutFile, topologyCardOutFile, topologyOutFile];
+// Entry filenames carry a content hash, so list what was actually emitted.
+async function emittedCardFiles() {
+  const names = await readdir(outDir);
+  return names
+    .filter((name) => CARD_FILE_PREFIXES.some((prefix) => name.startsWith(prefix)))
+    .sort()
+    .map((name) => resolve(outDir, name));
+}
 
 if (watch) {
   await cleanCardOutputDir();
   const watcher = await rolldownWatch(rolldownConfig);
   watcher.on("event", (event) => {
     if (event.code === "BUNDLE_END") {
-      for (const file of builtFiles) {
-        process.stdout.write(`built ${file}\n`);
-      }
+      void emittedCardFiles().then((files) => {
+        for (const file of [...files, topologyOutFile]) {
+          process.stdout.write(`built ${file}\n`);
+        }
+      });
     }
     if (event.code === "ERROR") {
       process.stderr.write(`${event.error}\n`);
     }
   });
-  for (const file of builtFiles) {
-    process.stdout.write(`watching ${file}\n`);
-  }
+  process.stdout.write(`watching ${outDir}\n`);
 } else {
   await cleanCardOutputDir();
   await rolldownBuild(rolldownConfig);
-  for (const file of builtFiles) {
+  for (const file of [...(await emittedCardFiles()), topologyOutFile]) {
     process.stdout.write(`built ${file}\n`);
   }
 }

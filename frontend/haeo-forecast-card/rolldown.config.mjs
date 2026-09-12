@@ -43,8 +43,12 @@ const browserTreeshake = {
 // `customElements.define` immediately, with no heavy imports. The heavy
 // rendering controller (preact, MobX, ELK) is split into a lazily-imported
 // chunk so element registration never waits on it to download or evaluate.
-// Chunk filenames are stable (no content hash) and prefixed per card to avoid
-// collisions and repo churn.
+// Entry and chunk filenames both carry a content hash, and entries are marked with
+// `.entry.` so the integration can discover them at runtime. Hashing every emitted
+// file is what makes long-lived cache headers safe: there is no stable URL left that
+// could serve a stale build alongside a newer one. Without it, a browser that has
+// cached the old fixed filename keeps loading it beside the current bundle, and the
+// two race to register the same custom element.
 export default defineConfig([
   {
     input: resolve(rootDir, "src/index.ts"),
@@ -54,8 +58,8 @@ export default defineConfig([
     output: {
       dir: outDir,
       format: "esm",
-      entryFileNames: "haeo-forecast-card.min.js",
-      chunkFileNames: "haeo-forecast-card.[name].js",
+      entryFileNames: "haeo-forecast-card.entry.[hash].js",
+      chunkFileNames: "haeo-forecast-card.[name].[hash].js",
       sourcemap: false,
       minify: true,
       codeSplitting: true,
@@ -69,8 +73,8 @@ export default defineConfig([
     output: {
       dir: outDir,
       format: "esm",
-      entryFileNames: "haeo-topology-card.min.js",
-      chunkFileNames: "haeo-topology-card.[name].js",
+      entryFileNames: "haeo-topology-card.entry.[hash].js",
+      chunkFileNames: "haeo-topology-card.[name].[hash].js",
       sourcemap: false,
       minify: true,
       codeSplitting: true,

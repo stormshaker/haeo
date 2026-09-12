@@ -221,7 +221,11 @@ jobs:
         run: python3 tools/check.py frontend
 
       - name: Upload frontend coverage to Codecov
-        if: ${{ github.event_name != 'release' && !cancelled() }}
+        # Codecov uploads are tokenless, which only works for the repo registered
+        # on Codecov. A fork has no token and the upload is rejected, so skip it
+        # there for the same reason the HACS job is skipped. Drop the repository
+        # test if this fork is ever registered and given a CODECOV_TOKEN.
+        if: ${{ github.event_name != 'release' && !cancelled() && github.repository == 'hass-energy/haeo' }}
         uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
         with:
           files: frontend/haeo-forecast-card/coverage/lcov.info
@@ -251,13 +255,15 @@ jobs:
         run: python3 tools/check.py test -- --cov=custom_components/haeo --cov-branch --cov-report=xml --junitxml=junit.xml -o junit_family=legacy
 
       - name: Upload test results to Codecov
-        if: ${{ github.event_name != 'release' && !cancelled() }}
+        # Skipped on forks — see the frontend coverage upload above.
+        if: ${{ github.event_name != 'release' && !cancelled() && github.repository == 'hass-energy/haeo' }}
         uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
         with:
           report_type: test_results
 
       - name: Upload coverage to Codecov
-        if: ${{ github.event_name != 'release' && !cancelled() }}
+        # Skipped on forks — see the frontend coverage upload above.
+        if: ${{ github.event_name != 'release' && !cancelled() && github.repository == 'hass-energy/haeo' }}
         uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
         with:
           flags: python

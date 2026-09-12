@@ -23,6 +23,8 @@ from custom_components.haeo.core.model.network import (
     SimplexTuning,
     SolveOptions,
     _bisect_boundary,
+    _build_cost_vectors,
+    _ensure_optimal,
 )
 
 # Test constants
@@ -805,3 +807,104 @@ def test_add_policy_pricing_unknown_tag() -> None:
                 terms=[PolicyPricingTerm(connection="conn", tag=99)],
             )
         )
+
+
+# Non-finite and out-of-range guards around the lex constraint
+
+
+def test_solver_options_lower_small_matrix_value() -> None:
+    """Test that a negligible coefficient is kept rather than aborting the solve.
+
+    HiGHS drops any coefficient below ``small_matrix_value`` and reports kWarning, and
+    highspy raises on every status that is not kOk -- so the default 1e-9 turns a
+    numerically irrelevant term into a failed solve.
+    """
+    solver = Highs()
+    solver.setOptionValue("output_flag", False)
+    LexOptions().apply(solver)
+
+    assert solver.getOptionValue("small_matrix_value")[1] == pytest.approx(1e-12)
+
+    variables = solver.addVariables(2, lb=0, ub=10)
+    # Would raise under the 1e-9 default.
+    solver.addConstrs((1e-10 * variables[0] + 1.0 * variables[1] <= 5.0,))
+    assert solver.numConstrs == 1
+
+
+def test_ensure_optimal_rejects_non_finite_objective() -> None:
+    """Test that a NaN objective is rejected even when the status is optimal.
+
+    A NaN cost coefficient is accepted by HiGHS without a warning, so kOptimal does not
+    imply a usable objective value. The lex solve passes this value back as a constraint
+    bound, where a NaN is only reported as "Error adding constraint to the model".
+    """
+    solver = Mock()
+    solver.getModelStatus.return_value = HighsModelStatus.kOptimal
+    solver.modelStatusToString.return_value = "Optimal"
+    solver.getObjectiveValue.return_value = float("nan")
+
+    with pytest.raises(ValueError, match="objective is nan"):
+        _ensure_optimal(solver)
+
+
+def test_ensure_optimal_returns_a_finite_objective() -> None:
+    """Test that an ordinary optimal solve is unaffected."""
+    solver = Mock()
+    solver.getModelStatus.return_value = HighsModelStatus.kOptimal
+    solver.getObjectiveValue.return_value = 12.5
+
+    assert _ensure_optimal(solver) == pytest.approx(12.5)
+
+
+def test_build_cost_vectors_names_a_non_finite_coefficient() -> None:
+    """Test that a non-finite cost is reported with the column that carries it."""
+    solver = Highs()
+    solver.setOptionValue("output_flag", False)
+    variables = solver.addVariables(3, lb=0, ub=1)
+    objective = float("nan") * variables[0] + 2.0 * variables[1]
+
+    with pytest.raises(ValueError, match="primary objective has 1 non-finite cost"):
+        _build_cost_vectors((objective, None), 3)
+
+
+def test_build_cost_vectors_passes_finite_costs_through() -> None:
+    """Test that ordinary costs are unchanged by the guard."""
+    solver = Highs()
+    solver.setOptionValue("output_flag", False)
+    variables = solver.addVariables(3, lb=0, ub=1)
+    objective = 1.5 * variables[0] + 2.0 * variables[1]
+
+    vectors = _build_cost_vectors((objective, None), 3)
+
+    assert vectors[0] == pytest.approx([1.5, 2.0, 0.0])
+    assert np.all(vectors[1] == 0)
+
+
+@pytest.mark.parametrize(
+    ("coefficient", "bound", "expected"),
+    [
+        (1.0, float("nan"), "bound is nan"),
+        (1e16, 5.0, "larger than"),
+        (1e-14, 5.0, "smaller than"),
+    ],
+    ids=["nan-bound", "huge-coefficient", "tiny-coefficient"],
+)
+def test_constraint_rejection_diagnostic_names_the_cause(
+    coefficient: float,
+    bound: float,
+    expected: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that each of the three rejection causes is named in the log.
+
+    highspy raises one opaque message for all three, which is what made this fault take
+    forty minutes to attribute.
+    """
+    caplog.set_level(logging.ERROR, logger=network_module.__name__)
+    network = Network(name="test_network", periods=np.array([1.0, 1.0]))
+    variables = network._solver.addVariables(2, lb=0, ub=10)
+
+    network._log_constraint_rejection(coefficient * variables[0] + 1.0 * variables[1] <= 5.0, bound)
+
+    assert "Lex constraint rejected" in caplog.text
+    assert expected in caplog.text

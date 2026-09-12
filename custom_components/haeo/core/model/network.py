@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 import logging
+import math
 from typing import Any, Final, Literal, overload
 
 from highspy import Highs, HighsModelStatus
@@ -34,6 +35,10 @@ _CAL_MAX_STEPS: Final = 40  # bisection budget for upper boundary search
 _CAL_CONVERGENCE: Final = 0.01  # stop bisection when interval < this (log10 decades)
 _CAL_MARGIN: Final = 1.0  # step back from upper boundary (log10 decades)
 
+# Cap on how many offending columns a diagnostic names, so one bad vector cannot produce a
+# log line thousands of entries long.
+_MAX_REPORTED_COLUMNS: Final = 10
+
 
 @dataclass(frozen=True, kw_only=True)
 class _SolverBase:
@@ -41,10 +46,19 @@ class _SolverBase:
 
     presolve: OnOffChoose = "choose"
     parallel: OnOffChoose = "choose"
+    # HiGHS DROPS any matrix coefficient below this and reports kWarning, and highspy raises
+    # on every status that is not kOk -- so a single negligible coefficient aborts the solve
+    # rather than being quietly ignored, which is what took the optimiser down for 40 minutes
+    # on 2026-09-13. 1e-12 is HiGHS's own minimum for the option: 1e-13 and below are
+    # refused with kError and leave the previous value in place. That buys three orders of
+    # magnitude over the 1e-9 default, and a coefficient smaller than 1e-12 could not move
+    # any answer this model produces.
+    small_matrix_value: float = 1e-12
 
     def _apply_common(self, h: Highs) -> None:
         h.setOptionValue("presolve", self.presolve)
         h.setOptionValue("parallel", self.parallel)
+        h.setOptionValue("small_matrix_value", self.small_matrix_value)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -510,9 +524,57 @@ class Network:
             # taking an Iterable and a bare highs_linear_expression is not one -- which is
             # both why passing it bare works at runtime (addConstrs only unpacks args[0] when
             # it is Iterable) and why the type checker rejects it. The tuple satisfies both.
-            (self._lex_constraint,) = self._solver.addConstrs((constraint_expr,))
+            #
+            # The rollback keeps the MODEL clean; it does not make the next solve succeed. The
+            # inputs are deterministic, so a rejected row is re-rejected every cycle until the
+            # cause is gone -- observed as 40 minutes of identical failures on 2026-09-13.
+            # Hence the diagnostic below: "Error adding constraint to the model" is all highspy
+            # says, and it covers three different causes.
+            try:
+                (self._lex_constraint,) = self._solver.addConstrs((constraint_expr,))
+            except Exception:
+                self._log_constraint_rejection(constraint_expr, optimal_value)
+                raise
         else:
             self._update_constraint(self._lex_constraint, constraint_expr)
+
+    def _log_constraint_rejection(
+        self,
+        constraint_expr: highs_linear_expression,
+        optimal_value: float,
+    ) -> None:
+        """Say which of the three possible causes rejected the lex constraint.
+
+        highspy raises the same opaque message whether a coefficient was below
+        ``small_matrix_value``, above ``large_matrix_value``, or the bound was not finite.
+        Measured against highspy 1.15.1, those are the only three conditions that do it -- a
+        NaN *coefficient* is accepted, and an infinite bound is accepted.
+        """
+        try:
+            _idxs, vals = constraint_expr.unique_elements()
+            finite = np.asarray(vals, dtype=np.float64)
+            nonzero = np.abs(finite[finite != 0.0])
+            smallest = float(nonzero.min()) if nonzero.size else 0.0
+            largest = float(nonzero.max()) if nonzero.size else 0.0
+            small_limit = self._solver.getOptionValue("small_matrix_value")[1]
+            large_limit = self._solver.getOptionValue("large_matrix_value")[1]
+            suspects: list[str] = []
+            if not math.isfinite(optimal_value):
+                suspects.append(f"bound is {optimal_value}")
+            if nonzero.size and smallest < small_limit:
+                suspects.append(f"smallest coefficient {smallest:.3e} is smaller than small_matrix_value {small_limit:.3e}")
+            if nonzero.size and largest > large_limit:
+                suspects.append(f"largest coefficient {largest:.3e} is larger than large_matrix_value {large_limit:.3e}")
+            _LOGGER.error(
+                "Lex constraint rejected: bound=%r, %d terms, |coeff| in [%.3e, %.3e]. Cause: %s",
+                optimal_value,
+                len(vals),
+                smallest,
+                largest,
+                "; ".join(suspects) if suspects else "none of the three known conditions -- investigate",
+            )
+        except Exception:  # noqa: BLE001 - a diagnostic must never mask the error it explains
+            _LOGGER.exception("Lex constraint rejected, and the diagnostic itself failed")
 
     def _relax_lex_constraint(self) -> None:
         """Relax the lex constraint bounds so it is inactive."""
@@ -607,11 +669,21 @@ def _build_cost_vectors(
     per objective switch).
     """
     vectors: list[NDArray[np.float64]] = []
-    for obj in objectives:
+    for position, obj in enumerate(objectives):
         vec = np.zeros(n_vars, dtype=np.float64)
         if obj is not None:
             idxs, vals = obj.unique_elements()
             vec[idxs] = vals
+            # HiGHS accepts a NaN cost silently, so an unchecked one surfaces much later as
+            # an unexplained NaN objective or an opaque constraint failure. Name it here,
+            # where the offending columns are still known.
+            bad = np.flatnonzero(~np.isfinite(vec))
+            if bad.size:
+                shown = ", ".join(f"col {c}={vec[c]}" for c in bad[:_MAX_REPORTED_COLUMNS])
+                more = "" if bad.size <= _MAX_REPORTED_COLUMNS else f" (+{bad.size - _MAX_REPORTED_COLUMNS} more)"
+                name = "primary" if position == 0 else "secondary"
+                msg = f"{name} objective has {bad.size} non-finite cost coefficient(s): {shown}{more}"
+                raise ValueError(msg)
         vectors.append(vec)
     return vectors
 
@@ -636,4 +708,13 @@ def _ensure_optimal(solver: Highs) -> float:
     if status != HighsModelStatus.kOptimal:
         msg = f"Optimization failed with status: {solver.modelStatusToString(status)}"
         raise ValueError(msg)
-    return solver.getObjectiveValue()
+    value = solver.getObjectiveValue()
+    # kOptimal does not guarantee a finite objective: a NaN cost coefficient is accepted by
+    # HiGHS WITHOUT a warning (verified against highspy 1.15.1), so it reaches the objective
+    # and out comes NaN on an otherwise "optimal" solve. Caught here because the lex solve
+    # passes this value straight back as a constraint bound, where a NaN produces only
+    # "Error adding constraint to the model" -- naming neither the value nor its origin.
+    if not math.isfinite(value):
+        msg = f"Optimization reported {solver.modelStatusToString(status)} but the objective is {value}"
+        raise ValueError(msg)
+    return value

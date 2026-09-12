@@ -6,7 +6,7 @@ import logging
 import math
 from typing import Any, Final, Literal, overload
 
-from highspy import Highs, HighsModelStatus
+from highspy import Highs, HighsModelStatus, HighsStatus
 from highspy.highs import highs_cons, highs_linear_expression
 import numpy as np
 from numpy.typing import NDArray
@@ -513,30 +513,69 @@ class Network:
         constraint_expr = objective <= optimal_value
 
         if self._lex_constraint is None:
-            # addConstrs, not addConstr, for the rollback. highspy raises on any status that
-            # is not kOk -- kWarning included -- and HiGHS returns kWarning for a coefficient
-            # it drops while *still adding the row*. The singular addConstr has no cleanup, so
-            # the assignment below would never run while the row sat in the model: the handle
-            # stays None, _relax_lex_constraint silently becomes a no-op, and every later
-            # solve is constrained by a row nothing can reach. The plural form wraps the batch
-            # and deleteRows on any exception, so a failure leaves the model untouched and the
-            # next solve can recover. Passed as a one-element tuple: addConstrs is typed as
-            # taking an Iterable and a bare highs_linear_expression is not one -- which is
-            # both why passing it bare works at runtime (addConstrs only unpacks args[0] when
-            # it is Iterable) and why the type checker rejects it. The tuple satisfies both.
-            #
-            # The rollback keeps the MODEL clean; it does not make the next solve succeed. The
-            # inputs are deterministic, so a rejected row is re-rejected every cycle until the
-            # cause is gone -- observed as 40 minutes of identical failures on 2026-09-13.
-            # Hence the diagnostic below: "Error adding constraint to the model" is all highspy
-            # says, and it covers three different causes.
-            try:
-                (self._lex_constraint,) = self._solver.addConstrs((constraint_expr,))
-            except Exception:
-                self._log_constraint_rejection(constraint_expr, optimal_value)
-                raise
+            self._lex_constraint = self._add_lex_row(constraint_expr, optimal_value)
         else:
             self._update_constraint(self._lex_constraint, constraint_expr)
+
+    def _add_lex_row(
+        self,
+        constraint_expr: highs_linear_expression,
+        optimal_value: float,
+    ) -> highs_cons:
+        """Add the lex row, dropping coefficients HiGHS would refuse to store.
+
+        This deliberately does not use ``addConstr``/``addConstrs``. Both funnel through
+        highspy's ``__addRow``, which raises on any status that is not ``kOk`` -- and HiGHS
+        returns ``kWarning`` merely for *dropping* a coefficient below ``small_matrix_value``.
+        So a term too small to influence any answer aborts the whole solve, and because the
+        inputs are deterministic it aborts every subsequent solve too: 70 minutes of identical
+        failures on 2026-09-13, from a coefficient of **1.391e-13** against a largest of 0.335.
+
+        Lowering the option does not reach that. HiGHS refuses any ``small_matrix_value``
+        below 1e-12 with ``kError``, so 1.391e-13 is unreachable by configuration and has to
+        be dropped here instead.
+
+        Dropping it changes nothing: HiGHS would have dropped it anyway, which is exactly what
+        it was warning about. The difference is that the row now gets added.
+        """
+        idxs, vals = constraint_expr.unique_elements()
+        bounds = constraint_expr.bounds
+        if bounds is None:  # pragma: no cover - the caller always builds an inequality
+            msg = "Lex constraint expression has no bounds"
+            raise ValueError(msg)
+
+        limit = float(self._solver.getOptionValue("small_matrix_value")[1])  # type: ignore[arg-type]
+        values = np.asarray(vals, dtype=np.float64)
+        keep = np.abs(values) >= limit
+        dropped = int(keep.size - np.count_nonzero(keep))
+        if dropped:
+            _LOGGER.debug(
+                "Dropped %d lex coefficient(s) below small_matrix_value %.3e of %d total",
+                dropped,
+                limit,
+                keep.size,
+            )
+
+        kept_idxs = np.asarray(idxs, dtype=np.int32)[keep]
+        kept_vals = values[keep]
+        row = self._solver.numConstrs
+        # addRow is inherited from the pybind11 base and not declared on the Python wrapper,
+        # and highs_cons's constructor is likewise undeclared; both are what highspy's own
+        # __addRow uses.
+        status = self._solver.addRow(  # type: ignore[attr-defined]
+            bounds[0], bounds[1], len(kept_idxs), kept_idxs, kept_vals
+        )
+
+        if status != HighsStatus.kOk:
+            # Roll back exactly as addConstrs would, so a rejected row cannot orphan itself
+            # and leave _relax_lex_constraint a silent no-op against a row nothing can reach.
+            if self._solver.numConstrs > row:
+                self._solver.deleteRows(1, [row])
+            self._log_constraint_rejection(constraint_expr, optimal_value)
+            msg = f"Adding the lex constraint returned {status}"
+            raise ValueError(msg)
+
+        return highs_cons(row, self._solver)  # type: ignore[call-arg]
 
     def _log_constraint_rejection(
         self,

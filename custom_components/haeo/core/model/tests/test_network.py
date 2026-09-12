@@ -914,3 +914,68 @@ def test_constraint_rejection_diagnostic_names_the_cause(
     assert "Lex constraint rejected" in template
     # The cause summary is the final argument of the format string.
     assert expected in str(args[-1])
+
+
+def test_lex_row_survives_a_coefficient_below_the_option_floor() -> None:
+    """Test that a coefficient HiGHS cannot be configured to keep is dropped, not fatal.
+
+    Reproduces the live failure of 2026-09-13: a lex row of 722 terms whose smallest
+    coefficient was 1.391e-13 against a largest of 0.335. HiGHS drops anything below
+    ``small_matrix_value`` and reports kWarning, highspy's addConstr/addConstrs raise on it,
+    and the option cannot go below 1e-12 -- so configuration alone cannot reach 1.391e-13.
+    """
+    network = Network(name="test_network", periods=np.array([1.0, 1.0]))
+    solver = network._solver
+    variables = solver.addVariables(3, lb=0, ub=10)
+
+    expr = 1.391e-13 * variables[0] + 0.335 * variables[1] + 1.0 * variables[2] <= 23.9
+    cons = network._add_lex_row(expr, 23.9)
+
+    assert cons.index == solver.numConstrs - 1
+    # The negligible term is gone; the two that matter are kept.
+    stored = solver.getExpr(cons)
+    assert len(stored.idxs) == 2
+    assert min(abs(v) for v in stored.vals) >= 0.335
+
+
+def test_lex_row_keeps_every_significant_coefficient() -> None:
+    """Test that an ordinary row is stored whole."""
+    network = Network(name="test_network", periods=np.array([1.0, 1.0]))
+    solver = network._solver
+    variables = solver.addVariables(3, lb=0, ub=10)
+
+    expr = 1.0 * variables[0] + 0.5 * variables[1] + 0.25 * variables[2] <= 7.0
+    cons = network._add_lex_row(expr, 7.0)
+
+    stored = solver.getExpr(cons)
+    assert len(stored.idxs) == 3
+    assert sorted(abs(v) for v in stored.vals) == pytest.approx([0.25, 0.5, 1.0])
+
+
+def test_lex_row_still_solves_after_pruning() -> None:
+    """Test that the pruned row constrains the solve exactly as the full row would."""
+    network = Network(name="test_network", periods=np.array([1.0, 1.0]))
+    solver = network._solver
+    variables = solver.addVariables(2, lb=0, ub=10)
+
+    network._add_lex_row(1e-14 * variables[0] + 1.0 * variables[1] <= 4.0, 4.0)
+    solver.minimize(-variables[1])
+
+    assert solver.getObjectiveValue() == pytest.approx(-4.0)
+
+
+def test_lex_row_rolls_back_and_reports_a_coefficient_it_cannot_prune() -> None:
+    """Test that an over-large coefficient rolls the row back rather than orphaning it.
+
+    Pruning is only valid downwards -- dropping a term above ``large_matrix_value`` would
+    change the model, so that case must still fail, and must leave no row behind.
+    """
+    network = Network(name="test_network", periods=np.array([1.0, 1.0]))
+    solver = network._solver
+    variables = solver.addVariables(2, lb=0, ub=10)
+    before = solver.numConstrs
+
+    with pytest.raises(ValueError, match="Adding the lex constraint returned"):
+        network._add_lex_row(1e16 * variables[0] + 1.0 * variables[1] <= 5.0, 5.0)
+
+    assert solver.numConstrs == before

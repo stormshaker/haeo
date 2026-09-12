@@ -11,5 +11,5 @@
   "issue_tracker": "https://github.com/hass-energy/haeo/issues",
   "quality_scale": "platinum",
   "requirements": ["highspy>=1.12.0", "numpy>=1.21.0"],
-  "version": "0.4.1.post9"
+  "version": "0.4.1.post10"
 }

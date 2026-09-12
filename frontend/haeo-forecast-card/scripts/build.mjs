@@ -10,8 +10,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, "..");
 const workspaceRoot = resolve(rootDir, "..", "..");
 const outDir = resolve(workspaceRoot, "custom_components", "haeo", "www");
-const forecastOutFile = resolve(outDir, "haeo-forecast-card.min.js");
-const topologyCardOutFile = resolve(outDir, "haeo-topology-card.min.js");
 const topologyOutFile = resolve(rootDir, "dist", "render-topology-svg.mjs");
 const watch = process.argv.includes("--watch");
 

@@ -1037,13 +1037,16 @@ async def test_async_register_static_skips_when_http_unavailable(
 async def test_async_register_static_skips_when_card_not_found(
     hass: HomeAssistant,
 ) -> None:
-    """Test that static registration is skipped when card bundle file is missing."""
+    """Test that static registration is skipped when no card bundle is present."""
     mock_http = Mock()
     mock_http.async_register_static_paths = AsyncMock()
     hass.http = mock_http  # type: ignore[attr-defined]
 
+    # Entry filenames carry a content hash, so the integration discovers bundles by
+    # globbing the static directory rather than probing one fixed name. An empty glob
+    # is what a missing build looks like.
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("custom_components.haeo.Path.exists", lambda _self: False)
+        mp.setattr("custom_components.haeo.Path.glob", lambda _self, _pattern: iter(()))
         await _async_register_static_frontend_resources(hass)
 
     mock_http.async_register_static_paths.assert_not_called()

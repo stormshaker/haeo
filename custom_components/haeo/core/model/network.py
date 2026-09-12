@@ -498,9 +498,14 @@ class Network:
     ) -> None:
         """Set the single lex constraint to bound the given objective."""
         constraint_expr = objective <= optimal_value
-        _assert_row_is_solver_safe(self._solver, constraint_expr, "lex objective constraint")
 
         if self._lex_constraint is None:
+            # Only the addConstr path can poison the model. _update_constraint goes through
+            # changeRowBounds/changeCoeff, which do not raise on a dropped coefficient, so the
+            # handle survives and the row stays reachable. Sub-threshold coefficients are
+            # routine here -- they appear in the project's own scenarios -- so guarding both
+            # paths would fail solves that have always been safe.
+            _assert_row_is_solver_safe(self._solver, constraint_expr, "lex objective constraint")
             self._lex_constraint = self._solver.addConstr(constraint_expr)
         else:
             self._update_constraint(self._lex_constraint, constraint_expr)

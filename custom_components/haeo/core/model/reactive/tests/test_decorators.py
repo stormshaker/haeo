@@ -436,7 +436,9 @@ def _solved_battery() -> Battery:
         initial_charge=5.0,
     )
     battery.constraints()
-    solver.minimize()
+    # An explicit objective, as every other solve in this file does; the ranging data this
+    # test reads is only valid off an optimal solution.
+    solver.minimize(battery.power_consumption[0])
     return battery
 
 

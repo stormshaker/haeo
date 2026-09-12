@@ -563,9 +563,13 @@ class Network:
             if not math.isfinite(optimal_value):
                 suspects.append(f"bound is {optimal_value}")
             if nonzero.size and smallest < small_limit:
-                suspects.append(f"smallest coefficient {smallest:.3e} is smaller than small_matrix_value {small_limit:.3e}")
+                suspects.append(
+                    f"smallest coefficient {smallest:.3e} is smaller than small_matrix_value {small_limit:.3e}"
+                )
             if nonzero.size and largest > large_limit:
-                suspects.append(f"largest coefficient {largest:.3e} is larger than large_matrix_value {large_limit:.3e}")
+                suspects.append(
+                    f"largest coefficient {largest:.3e} is larger than large_matrix_value {large_limit:.3e}"
+                )
             _LOGGER.error(
                 "Lex constraint rejected: bound=%r, %d terms, |coeff| in [%.3e, %.3e]. Cause: %s",
                 optimal_value,
@@ -574,7 +578,8 @@ class Network:
                 largest,
                 "; ".join(suspects) if suspects else "none of the three known conditions -- investigate",
             )
-        except Exception:  # noqa: BLE001 - a diagnostic must never mask the error it explains
+        # A diagnostic must never mask the error it exists to explain.
+        except Exception:
             _LOGGER.exception("Lex constraint rejected, and the diagnostic itself failed")
 
     def _relax_lex_constraint(self) -> None:

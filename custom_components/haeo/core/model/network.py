@@ -559,18 +559,23 @@ class Network:
         kept_idxs = np.asarray(idxs, dtype=np.int32)[keep]
         kept_vals = values[keep]
         row = self._solver.numConstrs
-        status = self._solver.addRow(bounds[0], bounds[1], len(kept_idxs), kept_idxs, kept_vals)
+        # addRow is inherited from the pybind11 base and not declared on the Python wrapper,
+        # and highs_cons's constructor is likewise undeclared; both are what highspy's own
+        # __addRow uses.
+        status = self._solver.addRow(  # type: ignore[attr-defined]
+            bounds[0], bounds[1], len(kept_idxs), kept_idxs, kept_vals
+        )
 
         if status != HighsStatus.kOk:
             # Roll back exactly as addConstrs would, so a rejected row cannot orphan itself
             # and leave _relax_lex_constraint a silent no-op against a row nothing can reach.
             if self._solver.numConstrs > row:
-                self._solver.deleteRows(1, np.array([row], dtype=np.int32))
+                self._solver.deleteRows(1, [row])
             self._log_constraint_rejection(constraint_expr, optimal_value)
             msg = f"Adding the lex constraint returned {status}"
             raise ValueError(msg)
 
-        return highs_cons(row, self._solver)
+        return highs_cons(row, self._solver)  # type: ignore[call-arg]
 
     def _log_constraint_rejection(
         self,

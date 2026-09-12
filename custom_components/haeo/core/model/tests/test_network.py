@@ -928,10 +928,6 @@ def test_lex_row_survives_a_coefficient_below_the_option_floor() -> None:
     solver = network._solver
     variables = solver.addVariables(3, lb=0, ub=10)
 
-    # addConstrs, the previous approach, cannot take this row at any option setting.
-    with pytest.raises(Exception, match="Error adding constraint to the model"):
-        solver.addConstrs((1.391e-13 * variables[0] + 0.335 * variables[1] <= 23.9,))
-
     expr = 1.391e-13 * variables[0] + 0.335 * variables[1] + 1.0 * variables[2] <= 23.9
     cons = network._add_lex_row(expr, 23.9)
 

@@ -556,8 +556,9 @@ class Network:
             nonzero = np.abs(finite[finite != 0.0])
             smallest = float(nonzero.min()) if nonzero.size else 0.0
             largest = float(nonzero.max()) if nonzero.size else 0.0
-            small_limit = self._solver.getOptionValue("small_matrix_value")[1]
-            large_limit = self._solver.getOptionValue("large_matrix_value")[1]
+            # getOptionValue is typed as returning bool | int | float | str for the value.
+            small_limit = float(self._solver.getOptionValue("small_matrix_value")[1])  # type: ignore[arg-type]
+            large_limit = float(self._solver.getOptionValue("large_matrix_value")[1])  # type: ignore[arg-type]
             suspects: list[str] = []
             if not math.isfinite(optimal_value):
                 suspects.append(f"bound is {optimal_value}")

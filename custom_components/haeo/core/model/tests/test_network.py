@@ -884,8 +884,8 @@ def test_build_cost_vectors_passes_finite_costs_through() -> None:
     ("coefficient", "bound", "expected"),
     [
         (1.0, float("nan"), "bound is nan"),
-        (1e16, 5.0, "larger than"),
-        (1e-14, 5.0, "smaller than"),
+        (1e16, 5.0, "is larger than large_matrix_value"),
+        (1e-14, 5.0, "is smaller than small_matrix_value"),
     ],
     ids=["nan-bound", "huge-coefficient", "tiny-coefficient"],
 )
@@ -893,18 +893,24 @@ def test_constraint_rejection_diagnostic_names_the_cause(
     coefficient: float,
     bound: float,
     expected: str,
-    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test that each of the three rejection causes is named in the log.
 
     highspy raises one opaque message for all three, which is what made this fault take
-    forty minutes to attribute.
+    forty minutes to attribute. Asserted against the logger rather than caplog so the test
+    does not depend on handler propagation.
     """
-    caplog.set_level(logging.ERROR, logger=network_module.__name__)
+    logger = Mock()
+    monkeypatch.setattr(network_module, "_LOGGER", logger)
     network = Network(name="test_network", periods=np.array([1.0, 1.0]))
     variables = network._solver.addVariables(2, lb=0, ub=10)
 
     network._log_constraint_rejection(coefficient * variables[0] + 1.0 * variables[1] <= 5.0, bound)
 
-    assert "Lex constraint rejected" in caplog.text
-    assert expected in caplog.text
+    logger.exception.assert_not_called()
+    logger.error.assert_called_once()
+    template, *args = logger.error.call_args.args
+    assert "Lex constraint rejected" in template
+    # The cause summary is the final argument of the format string.
+    assert expected in str(args[-1])

@@ -3,7 +3,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 import logging
-import math
 from typing import Any, Final, Literal, overload
 
 from highspy import Highs, HighsModelStatus
@@ -500,13 +499,16 @@ class Network:
         constraint_expr = objective <= optimal_value
 
         if self._lex_constraint is None:
-            # Only the addConstr path can poison the model. _update_constraint goes through
-            # changeRowBounds/changeCoeff, which do not raise on a dropped coefficient, so the
-            # handle survives and the row stays reachable. Sub-threshold coefficients are
-            # routine here -- they appear in the project's own scenarios -- so guarding both
-            # paths would fail solves that have always been safe.
-            _assert_row_is_solver_safe(self._solver, constraint_expr, "lex objective constraint")
-            self._lex_constraint = self._solver.addConstr(constraint_expr)
+            # addConstrs, not addConstr, for the rollback. highspy raises on any status that
+            # is not kOk -- kWarning included -- and HiGHS returns kWarning for a coefficient
+            # it drops while *still adding the row*. The singular addConstr has no cleanup, so
+            # the assignment below would never run while the row sat in the model: the handle
+            # stays None, _relax_lex_constraint silently becomes a no-op, and every later
+            # solve is constrained by a row nothing can reach. The plural form wraps the batch
+            # and deleteRows on any exception, so a failure leaves the model untouched and the
+            # next solve can recover. A single expression is a valid one-element batch --
+            # highs_linear_expression is not Iterable, so it is not unpacked.
+            (self._lex_constraint,) = self._solver.addConstrs(constraint_expr)
         else:
             self._update_constraint(self._lex_constraint, constraint_expr)
 
@@ -624,61 +626,6 @@ def _set_cost_vector(
     """
     solver.changeColsCost(len(col_indices), col_indices, costs)
     solver.changeObjectiveOffset(0.0)
-
-
-def _solver_matrix_bounds(solver: Highs) -> tuple[float, float]:
-    """Return the solver's (small, large) matrix-value thresholds."""
-    small = solver.getOptionValue("small_matrix_value")
-    large = solver.getOptionValue("large_matrix_value")
-    # getOptionValue returns (HighsStatus, value) on some builds and a bare value on others.
-    small = small[1] if isinstance(small, tuple) else small
-    large = large[1] if isinstance(large, tuple) else large
-    return float(small), float(large)
-
-
-def _assert_row_is_solver_safe(solver: Highs, expr: highs_linear_expression, context: str) -> None:
-    """Raise before a row is handed to HiGHS if it cannot be added cleanly.
-
-    HiGHS returns ``kWarning`` rather than ``kError`` for a coefficient at or below
-    ``small_matrix_value``: it drops the entry, warns, and **still adds the row**.
-    ``highspy.Highs.__addRow`` raises on any status that is not ``kOk``, and the singular
-    ``addConstr`` has no rollback -- only the plural ``addConstrs`` deletes rows on failure.
-    So the caller's assignment never completes while the row is in the model, leaving the
-    model holding a constraint nothing has a handle to and nothing can relax.
-
-    Checking first means the model is never mutated, and the failure names the value that
-    caused it instead of surfacing as "Error adding constraint to the model."
-    """
-    if expr.bounds is None:
-        msg = f"{context}: constraint has no bounds; use a comparison (>=, ==, <=)"
-        raise ValueError(msg)
-
-    lo, hi = expr.bounds
-    for label, bound in (("lower", lo), ("upper", hi)):
-        if bound is not None and math.isnan(bound):
-            msg = f"{context}: {label} bound is NaN"
-            raise ValueError(msg)
-
-    small, large = _solver_matrix_bounds(solver)
-    idxs, vals = expr.unique_elements()
-
-    offenders = [
-        (int(i), float(v))
-        for i, v in zip(idxs, vals, strict=True)
-        if v != 0.0 and (math.isnan(v) or not math.isfinite(v) or abs(v) <= small or abs(v) >= large)
-    ]
-    if offenders:
-        shown = ", ".join(f"column {i} = {v!r}" for i, v in offenders[:5])
-        more = f" (and {len(offenders) - 5} more)" if len(offenders) > 5 else ""
-        msg = (
-            f"{context}: {len(offenders)} coefficient(s) outside the solver's usable range "
-            f"({small!r} < |value| < {large!r}): {shown}{more}. "
-            "HiGHS would warn and drop these while still adding the row, which highspy "
-            "raises on, leaving the model permanently constrained by a row this code "
-            "cannot reach. The value is almost certainly arithmetic residue rather than a "
-            "real quantity -- round it to zero at the source."
-        )
-        raise ValueError(msg)
 
 
 def _ensure_optimal(solver: Highs) -> float:

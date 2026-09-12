@@ -223,7 +223,11 @@ class ReactiveConstraint[R](ReactiveMethod[R]):
 
         # First call: create constraint(s) in solver
         if is_first_call:
-            cons = solver.addConstrs(expr) if isinstance(expr, list) else solver.addConstr(expr)  # type: ignore[arg-type]
+            # addConstrs for both shapes: the plural form rolls the model back if any row
+            # is rejected, where the singular addConstr leaves an orphan row behind and
+            # state["constraint"] unset, so nothing can reach or relax it afterwards.
+            # A lone expression is a valid one-element batch.
+            cons = solver.addConstrs(expr) if isinstance(expr, list) else solver.addConstrs(expr)[0]  # type: ignore[arg-type]
             state["constraint"] = cons
         else:
             # Subsequent call with invalidation: update constraint(s)

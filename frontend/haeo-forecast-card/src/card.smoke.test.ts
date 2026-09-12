@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import type { HassLike } from "./series";
 import { withSingleHubRegistry } from "./fixtures/scenarioOutputs";
-import "./card";
+import { stopForecastCardRegistration } from "./card";
 
 interface ForecastCardConstructor {
   getStubConfig: (hass?: HassLike) => { title?: string; hub_entry_id?: string };
@@ -48,6 +48,13 @@ function smokeHass(states: HassLike["states"]): HassLike {
 }
 
 describe("haeo-forecast-card smoke", () => {
+  // The card module retries its custom element registration on an interval after load.
+  // Cancel it, or the interval outlives this file's test environment and throws
+  // "customElements is not defined" into whichever file the worker runs next.
+  afterAll(() => {
+    stopForecastCardRegistration();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });

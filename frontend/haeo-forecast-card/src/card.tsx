@@ -3,6 +3,7 @@ import { discoverHaeoHubEntryId } from "./hub-selection";
 import type { HassLike } from "./series";
 import type { ForecastCardConfig } from "./types";
 import type { ForecastCardController } from "./forecast-card-controller";
+import { registerCardElement } from "./register-card-element";
 
 const FALLBACK_CARD_WIDTH_PX = 640;
 const FALLBACK_CARD_SIZE_ROWS = 6;
@@ -130,46 +131,7 @@ export class HaeoForecastCard extends HTMLElement {
 }
 
 /**
- * Register a card element, and keep it registered.
- *
- * Home Assistant can replace `window.customElements` with the scoped custom element
- * registry polyfill *after* this module has already run. The replacement registry does
- * not carry over registrations made against the native one, so an element registered
- * moments earlier silently disappears and Lovelace renders "Custom element doesn't
- * exist" for a bundle that loaded, ran, and registered without error.
- *
- * Measured on a failing load: at module evaluation `customElements.define` was still
- * native, the define did not throw, and `customElements.get(tag)` returned the
- * constructor immediately afterwards — yet the element was gone by the time Lovelace
- * built the card. On a load that succeeded, the polyfill was already installed when the
- * module ran, so the registration went into the registry that survived.
- *
- * Registering once is therefore not enough, and neither is retrying only until the first
- * success. This re-registers whenever the element goes missing, for long enough to cover
- * the swap, then stops.
+ * Registration is retried for a while after load; see `registerCardElement`.
+ * The stop function is exported only so tests can cancel the retries.
  */
-function registerCardElement(tag: string, ctor: CustomElementConstructor): void {
-  const ensure = (): void => {
-    if (customElements.get(tag) !== undefined) {
-      return;
-    }
-    try {
-      customElements.define(tag, ctor);
-    } catch {
-      // Another evaluation of this bundle won the race; nothing to do.
-    }
-  };
-
-  ensure();
-
-  let ticks = 0;
-  const timer = setInterval(() => {
-    ticks += 1;
-    ensure();
-    if (ticks >= 200) {
-      clearInterval(timer);
-    }
-  }, 50);
-}
-
-registerCardElement("haeo-forecast-card", HaeoForecastCard);
+export const stopForecastCardRegistration = registerCardElement("haeo-forecast-card", HaeoForecastCard);

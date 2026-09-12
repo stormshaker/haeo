@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import scenarioOutputs from "../../../tests/scenarios/scenario1/outputs.json";
 import type { HassLike } from "./series";
 import { isTopologyData } from "./topology-card-utils";
-import "./topology-card";
+import { stopTopologyCardRegistration } from "./topology-card";
 
 interface TopologyCardConstructor {
   getStubConfig: (hass?: HassLike) => { title?: string; hub_entry_id?: string };
@@ -61,6 +61,13 @@ async function waitForTopologyController(): Promise<void> {
 }
 
 describe("haeo-topology-card smoke", () => {
+  // The card module retries its custom element registration on an interval after load.
+  // Cancel it, or the interval outlives this file's test environment and throws
+  // "customElements is not defined" into whichever file the worker runs next.
+  afterAll(() => {
+    stopTopologyCardRegistration();
+  });
+
   afterEach(() => {
     document.body.innerHTML = "";
   });

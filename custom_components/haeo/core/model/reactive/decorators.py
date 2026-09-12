@@ -169,13 +169,22 @@ class ReactiveConstraint[R](ReactiveMethod[R]):
         range_up: tuple[float, ...] | None = None
         range_dn: tuple[float, ...] | None = None
         if rng.valid:
+            # Read each vector ONCE. `HighsSolution.row_value` and
+            # `HighsRangingRecord.value_` are pybind11 properties returning
+            # `std::vector<double>`, which pybind11 converts to a fresh Python list on
+            # every access -- they are not views. Reading them inside the loop below
+            # materialises three N-element lists per row, making this O(rows**2): 86 us
+            # per element at 4,000 rows against 0.29 us off a hoisted list.
+            row_value = sol.row_value
+            bound_up = rng.row_bound_up.value_
+            bound_dn = rng.row_bound_dn.value_
             up_vals: list[float] = []
             dn_vals: list[float] = []
             for c_obj in arr.flat:
                 idx = c_obj.index
-                row_val = sol.row_value[idx]
-                up_vals.append(float(rng.row_bound_up.value_[idx] - row_val))
-                dn_vals.append(float(row_val - rng.row_bound_dn.value_[idx]))
+                row_val = row_value[idx]
+                up_vals.append(float(bound_up[idx] - row_val))
+                dn_vals.append(float(row_val - bound_dn[idx]))
             range_up = tuple(up_vals)
             range_dn = tuple(dn_vals)
 

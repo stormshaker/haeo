@@ -2,13 +2,21 @@
 
 from collections.abc import Sequence
 
-from highspy import Highs
+from highspy import Highs, HighsRanging, HighsSolution
 from highspy.highs import highs_linear_expression
 import numpy as np
+import pytest
 
 from custom_components.haeo.core.model.element import Element
 from custom_components.haeo.core.model.elements.battery import Battery
-from custom_components.haeo.core.model.reactive import ReactiveConstraint, ReactiveCost, TrackedParam, constraint, cost
+from custom_components.haeo.core.model.reactive import (
+    ReactiveConstraint,
+    ReactiveCost,
+    TrackedParam,
+    constraint,
+    cost,
+    decorators,
+)
 
 
 def create_test_element[T: Element[str]](cls: type[T]) -> T:
@@ -411,3 +419,139 @@ def test_constraint_without_output_flag() -> None:
     # But should include constraints with output=True
     assert "battery_soc_max" in outputs
     assert "battery_soc_min" in outputs
+
+
+# Shadow-price ranging extraction
+
+
+def _solved_battery() -> Battery:
+    """Build a two-period battery, create its constraints and solve it."""
+    solver = Highs()
+    solver.setOptionValue("output_flag", False)
+    battery = Battery(
+        name="test",
+        periods=np.array([1.0, 1.0]),
+        solver=solver,
+        capacity=np.array([10.0, 10.0, 10.0]),
+        initial_charge=5.0,
+    )
+    battery.constraints()
+    # An explicit objective, as every other solve in this file does; the ranging data this
+    # test reads is only valid off an optimal solution.
+    solver.minimize(battery.power_consumption[0])
+    return battery
+
+
+def test_ranging_output_matches_the_solver_vectors() -> None:
+    """Test that range_up and range_dn are bound minus row value, read off the solver."""
+    battery = _solved_battery()
+    solver = battery._solver
+
+    outputs = battery.outputs()
+    soc_max = outputs["battery_soc_max"]
+
+    assert soc_max.range_up is not None
+    assert soc_max.range_dn is not None
+    assert len(soc_max.range_up) == len(soc_max.values)
+    assert len(soc_max.range_dn) == len(soc_max.values)
+
+    # Recompute independently, reading each solver vector exactly once.
+    _status, rng = solver.getRanging()
+    assert rng.valid
+    row_value = solver.getSolution().row_value
+    bound_up = rng.row_bound_up.value_
+    bound_dn = rng.row_bound_dn.value_
+
+    state = getattr(battery, "_reactive_state_battery_soc_max", None)
+    assert state is not None
+    arr = np.asarray(state["constraint"], dtype=object)
+    expected_up = tuple(float(bound_up[c.index] - row_value[c.index]) for c in arr.flat)
+    expected_dn = tuple(float(row_value[c.index] - bound_dn[c.index]) for c in arr.flat)
+
+    assert soc_max.range_up == expected_up
+    assert soc_max.range_dn == expected_dn
+
+
+def test_ranging_vectors_are_copies_rather_than_views() -> None:
+    """Test that highspy returns a fresh list per access, which is why the reads are hoisted."""
+    battery = _solved_battery()
+    solver = battery._solver
+
+    _status, rng = solver.getRanging()
+    assert rng.valid
+    assert rng.row_bound_up.value_ is not rng.row_bound_up.value_
+    assert solver.getSolution().row_value is not solver.getSolution().row_value
+
+
+class _CountingRecord:
+    """Stand-in for HighsRangingRecord that counts reads of value_."""
+
+    def __init__(self, values: list[float], counter: dict[str, int], key: str) -> None:
+        """Store the values to hand out and the counter to bump."""
+        self._values = values
+        self._counter = counter
+        self._key = key
+
+    @property
+    def value_(self) -> list[float]:
+        """Return a fresh copy, as pybind11 does, and count the access."""
+        self._counter[self._key] += 1
+        return list(self._values)
+
+
+class _CountingRanging:
+    """Stand-in for HighsRanging whose bound records count their reads."""
+
+    def __init__(self, rng: HighsRanging, counter: dict[str, int]) -> None:
+        """Snapshot the real ranging vectors behind counting records."""
+        self.valid = rng.valid
+        self.row_bound_up = _CountingRecord(list(rng.row_bound_up.value_), counter, "up")
+        self.row_bound_dn = _CountingRecord(list(rng.row_bound_dn.value_), counter, "dn")
+
+
+class _CountingSolution:
+    """Stand-in for HighsSolution that counts reads of row_value."""
+
+    def __init__(self, solution: HighsSolution, counter: dict[str, int]) -> None:
+        """Snapshot the real row values behind a counting property."""
+        self._values = list(solution.row_value)
+        self._counter = counter
+
+    @property
+    def row_value(self) -> list[float]:
+        """Return a fresh copy, as pybind11 does, and count the access."""
+        self._counter["row"] += 1
+        return list(self._values)
+
+
+def test_ranging_vectors_are_read_once_per_output_not_once_per_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that the three solver vectors are read once per output, not once per row.
+
+    This is the regression guard for the quadratic cost. `HighsSolution.row_value` and
+    `HighsRangingRecord.value_` are pybind11 properties that return a fresh list on every
+    access, so reading them inside the per-row loop copies a whole vector per row. A
+    correctness test cannot catch a reintroduction, because the values come out the same
+    either way -- only the access count differs.
+    """
+    battery = _solved_battery()
+    solver = battery._solver
+    _status, real_rng = solver.getRanging()
+    real_solution = solver.getSolution()
+    counter = {"up": 0, "dn": 0, "row": 0}
+
+    def fake_get_ranging(_solver: Highs) -> tuple[_CountingRanging, _CountingSolution]:
+        return _CountingRanging(real_rng, counter), _CountingSolution(real_solution, counter)
+
+    monkeypatch.setattr(decorators, "_get_ranging", fake_get_ranging)
+
+    outputs = battery.outputs()
+    n_rows = len(outputs["battery_soc_max"].values)
+    assert n_rows >= 2, "the test needs more than one row to distinguish per-row from per-output"
+
+    n_shadow = sum(1 for output in outputs.values() if output.range_up is not None)
+    assert n_shadow >= 1
+    for key, count in counter.items():
+        assert count <= n_shadow, (
+            f"{key} was read {count} times for {n_shadow} shadow-price outputs over {n_rows} rows; "
+            "the property is being read inside the per-row loop again"
+        )
